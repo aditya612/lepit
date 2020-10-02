@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 // import 'dart:core';
 // import 'dart:html' as html;
@@ -13,12 +14,15 @@ class UserMedia extends StatefulWidget {
 
 class _UserMediaState extends State<UserMedia> {
   MediaStream _localStream;
+  RTCPeerConnection _peerConnection;
   final _localRenderer = RTCVideoRenderer();
+  final _remoteRenderer = RTCVideoRenderer();
   bool _inCalling = false;
   bool _isTorchOn = false;
   MediaRecorder _mediaRecorder;
   bool get _isRec => _mediaRecorder != null;
   // List<dynamic> cameras;
+  Timer _timer;
 
   @override
   void initState() {
@@ -40,10 +44,60 @@ class _UserMediaState extends State<UserMedia> {
       _hangUp();
     }
     _localRenderer.dispose();
+    _remoteRenderer.dispose();
   }
 
   Future<void> initRenderer() async {
     await _localRenderer.initialize();
+    await _remoteRenderer.initialize();
+  }
+
+  void handleStatsReport(Timer timer) async {
+    if (_peerConnection != null) {
+      var reports = await _peerConnection.getStats();
+      reports.forEach((report) {
+        print('report => { ');
+        print('   id: ${report.id},');
+        print('   type: ${report.type},');
+        print('   timestamp: ${report.timestamp},');
+        print('   values => {');
+        report.values.forEach((key, value) {
+          print('       $key : $value, ');
+        });
+        print('     }');
+        print('}');
+      });
+    }
+  }
+
+  void _onSignalingState(RTCSignalingState state) {
+    print(state);
+  }
+
+  void _onIceGatheringState(RTCIceGatheringState state) {
+    print(state);
+  }
+
+  void _onIceConnectionState(RTCIceConnectionState state) {
+    print(state);
+  }
+
+  void _onAddStream(MediaStream stream) {
+    print('addStream: ${stream.id}');
+    _remoteRenderer.srcObject = stream;
+  }
+
+  void _onRemoveStream(MediaStream stream) {
+    _remoteRenderer.srcObject = null;
+  }
+
+  void _onIceCandidate(RTCIceCandidate candidate) {
+    print('onCandidate: ${candidate.candidate}');
+    _peerConnection.addCandidate(candidate);
+  }
+
+  void _onRenegotiationNeeded() {
+    print('RenegotiationNeeded');
   }
 
   // make localStream visiable
@@ -55,15 +109,59 @@ class _UserMediaState extends State<UserMedia> {
       },
     };
 
+    final configuration = <String, dynamic>{
+      'iceServers': [
+        {'url': 'stun:stun.l.google.com:19302'},
+      ]
+    };
+
+    final offerSdpConstraints = <String, dynamic>{
+      'mandatory': {
+        'OfferoReceiveAudio': true,
+        'OfferoReceiveVideo': true,
+      },
+      'optional': [],
+    };
+
+    final loopbackConstraints = <String, dynamic>{
+      'mandatory': {},
+      'optional': [
+        {'DtlsSrtpKeyAgreement': false},
+      ],
+    };
+
+    if (_peerConnection != null) return;
+
     try {
       var stream = await MediaDevices.getUserMedia(mediaConstraints);
       // var stream = await MediaDevices.getDisplayMedia(mediaConstraints);
       _localRenderer.srcObject = _localStream = stream;
+
+      _peerConnection =
+          await createPeerConnection(configuration, loopbackConstraints);
+
+      _peerConnection.onSignalingState = _onSignalingState;
+      _peerConnection.onIceGatheringState = _onIceGatheringState;
+      _peerConnection.onIceConnectionState = _onIceConnectionState;
+      _peerConnection.onAddStream = _onAddStream;
+      _peerConnection.onRemoveStream = _onRemoveStream;
+      _peerConnection.onIceCandidate = _onIceCandidate;
+      _peerConnection.onRenegotiationNeeded = _onRenegotiationNeeded;
+
+      await _peerConnection.addStream(_localStream);
+      var description = await _peerConnection.createOffer(offerSdpConstraints);
+      print(description.sdp);
+      await _peerConnection.setLocalDescription(description);
+      // change for loopback
+      description.type = 'answer';
+      await _peerConnection.setRemoteDescription(description);
     } catch (e) {
       print(e.toString());
     }
 
     if (!mounted) return;
+
+    _timer = Timer.periodic(Duration(seconds: 1), handleStatsReport);
 
     setState(() {
       _inCalling = true;
@@ -74,7 +172,10 @@ class _UserMediaState extends State<UserMedia> {
   void _hangUp() async {
     try {
       await _localStream.dispose();
+      await _peerConnection.close();
+      _peerConnection = null;
       _localRenderer.srcObject = null;
+      _remoteRenderer.srcObject = null;
     } catch (e) {
       print(e.toString());
     }
@@ -82,6 +183,14 @@ class _UserMediaState extends State<UserMedia> {
     setState(() {
       _inCalling = false;
     });
+
+    _timer.cancel();
+  }
+
+  void _sendDtmf() async {
+    var dtmfSender =
+        _peerConnection.createDtmfSender(_localStream.getAudioTracks()[0]);
+    await dtmfSender.sendDtmf('123#');
   }
 
   // TODO: It's need to be implemented fully
@@ -185,10 +294,22 @@ class _UserMediaState extends State<UserMedia> {
 
   @override
   Widget build(BuildContext context) {
+    var widgets = <Widget>[
+      Expanded(
+        child: RTCVideoView(_localRenderer, mirror: true),
+      ),
+      Expanded(
+        child: RTCVideoView(_remoteRenderer),
+      )
+    ];
     return Scaffold(
       appBar: AppBar(
         actions: _inCalling
             ? [
+                IconButton(
+                  icon: Icon(Icons.keyboard),
+                  onPressed: _sendDtmf,
+                ),
                 IconButton(
                   tooltip: _isTorchOn ? 'Flash Off' : 'Flash On',
                   icon: Icon(_isTorchOn ? Icons.flash_off : Icons.flash_on),
@@ -233,19 +354,31 @@ class _UserMediaState extends State<UserMedia> {
       body: OrientationBuilder(
         builder: (context, orientation) {
           return Center(
-            child: Stack(children: [
-              Container(
-                margin: EdgeInsets.fromLTRB(0.0, 0.0, 0.0, 0.0),
-                width: MediaQuery.of(context).size.width,
-                height: MediaQuery.of(context).size.height,
-                child: RTCVideoView(
-                  _localRenderer,
-                  mirror: true,
-                  objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+            child: Stack(
+              children: [
+                Container(
+                  margin: EdgeInsets.fromLTRB(0.0, 0.0, 0.0, 0.0),
+                  width: MediaQuery.of(context).size.width,
+                  height: MediaQuery.of(context).size.height,
+                  child: RTCVideoView(
+                    _localRenderer,
+                    mirror: true,
+                    objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                  ),
+                  decoration: BoxDecoration(color: Colors.black54),
                 ),
-                decoration: BoxDecoration(color: Colors.black54),
-              ),
-            ]),
+                Container(
+                  child: RTCVideoView(
+                    _remoteRenderer,
+                    objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                  ),
+                  width: MediaQuery.of(context).size.width / 3,
+                  height: MediaQuery.of(context).size.width / 3,
+                  margin: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(color: Colors.black45),
+                ),
+              ],
+            ),
           );
         },
       ),
