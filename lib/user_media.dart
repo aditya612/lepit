@@ -351,6 +351,7 @@ class _UserMediaState extends State<UserMedia> {
       //     ],
       //   ),
       // ),
+
       body: OrientationBuilder(
         builder: (context, orientation) {
           return Center(
@@ -386,7 +387,10 @@ class _UserMediaState extends State<UserMedia> {
       floatingActionButton: FloatingActionButton(
         onPressed: _inCalling ? _hangUp : _makeCall,
         tooltip: _inCalling ? 'Hangup' : 'Call',
-        child: Icon(_inCalling ? Icons.call_end : Icons.phone),
+        backgroundColor: _inCalling ? Colors.red : Colors.green,
+        child: Icon(
+          _inCalling ? Icons.call_end : Icons.phone,
+        ),
       ),
     );
   }
