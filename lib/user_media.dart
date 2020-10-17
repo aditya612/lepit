@@ -91,7 +91,7 @@ class _UserMediaState extends State<UserMedia> {
       return;
     }
 
-    final storagePath = await getExternalStorageDirectory();
+    final storagePath = await getApplicationDocumentsDirectory();
     final filePath = storagePath.path + '/recording/lepit${DateTime.now()}.mp4';
     _mediaRecorder = MediaRecorder();
     setState(() {});
@@ -153,14 +153,8 @@ class _UserMediaState extends State<UserMedia> {
 
   // Some problem in package code
   void _captureFrame() async {
-    String filePath;
-    if (Platform.isAndroid) {
-      final storagePath = await getExternalStorageDirectory();
-      filePath = storagePath.path + '/lepit${DateTime.now()}.png';
-    } else {
-      final storagePath = await getApplicationDocumentsDirectory();
-      filePath = storagePath.path + '/lepit${DateTime.now()}.png';
-    }
+    final storagePath = await getApplicationDocumentsDirectory();
+    String filePath = storagePath.path + '/lepit${DateTime.now()}.png';
 
     final videoTrack = _localStream
         .getVideoTracks()
